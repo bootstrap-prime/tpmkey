@@ -17,7 +17,7 @@ der_sequence! {
 // pub static CURVE_INDETIFIER: &'static str = "nistp256";
 // pub static CURVE_TYPE: &'static str = "ecdsa-sha2-nistp256";
 
-pub static CURVE_INDETIFIER: &'static str = "rsa";
+pub static CURVE_IDENTIFIER: &'static str = "rsa";
 pub static CURVE_TYPE: &'static str = "rsa-sha2-256";
 
 pub struct EcdsaSha2Nistp256;
@@ -25,7 +25,7 @@ impl EcdsaSha2Nistp256 {
     // write to SSH-Key Format
     pub fn write(key: Vec<u8>) -> Vec<u8> {
         let curvetype = String::from(CURVE_TYPE);
-        let identifier = String::from(CURVE_INDETIFIER);
+        let identifier = String::from(CURVE_IDENTIFIER);
         let mut data = vec![];
 
         use thrussh_keys::encoding::Encoding;
