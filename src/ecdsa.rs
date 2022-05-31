@@ -1,6 +1,11 @@
-use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
+use byteorder::{BigEndian, ReadBytesExt};
 use eagre_asn1::der::DER;
-use std::io::{BufRead, Cursor, Read, Write};
+use openssl::pkey::PKey;
+use std::io::{BufRead, Cursor, Read};
+use thrussh_keys::{
+    key::{OpenSSLPKey, PublicKey},
+    PublicKeyBase64,
+};
 
 #[derive(Debug)]
 pub struct ECDSASign {
@@ -24,21 +29,31 @@ pub struct EcdsaSha2Nistp256;
 impl EcdsaSha2Nistp256 {
     // write to SSH-Key Format
     pub fn write(key: Vec<u8>) -> Vec<u8> {
-        let curvetype = String::from(CURVE_TYPE);
-        let identifier = String::from(CURVE_IDENTIFIER);
-        let mut data = vec![];
+        let is_rsa = true;
 
-        use thrussh_keys::encoding::Encoding;
+        if is_rsa {
+            use openssl::{bn::BigNum, pkey::Public, rsa::Rsa};
 
-        //write curve type
-        data.extend_ssh_mpint(curvetype.as_bytes());
-        //write identifier
-        data.extend_ssh_mpint(identifier.as_bytes());
-        //write key
-        // the exponent is included in here somewhere????
-        data.extend_ssh_mpint(key.as_slice());
+            let rsa_pub = OpenSSLPKey(
+                PKey::from_rsa(
+                    Rsa::<Public>::from_public_components(
+                        BigNum::from_slice(&key).unwrap(),
+                        BigNum::from_u32(2_u32.pow(16) + 1).unwrap(),
+                    )
+                    .unwrap(),
+                )
+                .unwrap(),
+            );
 
-        data
+            let pubkey = PublicKey::RSA {
+                key: rsa_pub,
+                hash: thrussh_keys::key::SignatureHash::SHA2_256,
+            };
+
+            pubkey.public_key_bytes()
+        } else {
+            unimplemented!()
+        }
     }
 
     //read from SSH-key Format

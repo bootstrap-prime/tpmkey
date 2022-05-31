@@ -30,6 +30,7 @@
 
               pkg-config
               tpm2-tss
+              openssl
 
               # for a good developer experience
               cargo-edit

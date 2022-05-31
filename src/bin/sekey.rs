@@ -13,7 +13,6 @@ use std::os::unix::net::UnixListener;
 use prettytable::format;
 use prettytable::Table;
 
-use sekey::ecdsa::{EcdsaSha2Nistp256, CURVE_TYPE};
 use sekey::handler::Handler;
 use sekey::Keychain;
 use ssh_agent::SSHAgentHandler;
@@ -44,14 +43,13 @@ fn main() {
 
     let matches = App::new("SeKey")
         .version("1.0")
-        .author("Nicolas Trippar <ntrippar@gmail.com>")
-        .about("Use Trusted Platform Module for SSH Authentication")
+        .about("Use the Trusted Platform Module for SSH Authentication")
         .arg(
             Arg::with_name("generate-keypair")
                 .long("generate-keypair")
                 .short("c")
                 .value_name("LABEL")
-                .help("Generate a key inside the Secure Enclave")
+                .help("Generate a key inside the Trusted Platform Module")
                 .takes_value(true),
         )
         .arg(
@@ -112,13 +110,13 @@ fn main() {
     if matches.is_present("list-keys") {
         let mut table = Table::new();
         table.set_format(format);
-        table.set_titles(row![bc => "Label", "ID"]);
+        table.set_titles(row![bc => "Label", "Fingerprint"]);
 
         let keys = Keychain::get_public_keys();
         if keys.len() >= 1 {
             for key in keys {
                 //key.hash
-                table.add_row(row![key.label, hex::encode(key.hash)]);
+                table.add_row(row![key.label, key.ssh.fingerprint()]);
             }
             table.printstd();
         } else {
@@ -128,36 +126,22 @@ fn main() {
 
     // match export-key
     if let Some(key_id) = matches.value_of("export-key") {
-        if let Ok(key_id) = hex::decode(key_id) {
-            let key = Keychain::get_public_key(key_id);
-            match key {
-                Ok(key) => {
-                    let key = EcdsaSha2Nistp256::write(match key.key.public() {
-                        tss_esapi::utils::PublicKey::Rsa(val) => val.to_vec(),
-                        _ => unimplemented!(),
-                    });
-                    println!("{} {}", CURVE_TYPE, base64::encode(key.as_slice()))
-                }
-                Err(_) => eprintln!("Invalid key ID"),
-            }
-        }
+        let key = Keychain::get_public_key_by_fingerprint(key_id);
+        let keyblob = thrussh_keys::PublicKeyBase64::public_key_base64(&key);
+        println!("{} {}", key.name(), keyblob.trim())
     }
 
     if let Some(key_id) = matches.value_of("delete-keypair") {
-        if let Ok(key_id_) = hex::decode(key_id) {
-            let key = Keychain::delete_keypair(key_id_);
-            match key {
-                Ok(_) => println!("Key {} successfully deleted", key_id),
-                Err(_) => eprintln!("Error deleting key"),
-            }
-        }
+        let key = Keychain::get_public_key_by_fingerprint(&key_id);
+        Keychain::delete_keypair(key).unwrap();
+        println!("Key SHA256:{} successfully deleted", key_id);
     }
 
     if let Some(label) = matches.value_of("generate-keypair") {
         let key = Keychain::generate_keypair(label.to_string());
         match key {
             Ok(_) => {
-                println!("Keypair {} successfully generated", label)
+                println!("Keypair SHA256:{} successfully generated", label)
             }
             Err(_) => eprintln!("Error generating key"),
         }

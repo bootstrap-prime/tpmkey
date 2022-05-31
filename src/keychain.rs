@@ -1,3 +1,7 @@
+use thrussh_keys::{
+    key::{PublicKey, SignatureHash},
+    parse_public_key_base64, PublicKeyBase64,
+};
 use tss_esapi::{
     abstraction::transient::{KeyMaterial, KeyParams, TransientKeyContextBuilder},
     interface_types::{
@@ -9,22 +13,36 @@ use tss_esapi::{
 
 use std::{fs, io::Write};
 
-#[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
 pub struct PubKey {
+    /// Name and purpose of the key
     pub label: String,
+    /// Public and private key to load into the TPM for crytographic operations
     pub key: KeyMaterial,
-    pub hash: Vec<u8>,
+    /// SSH formatted base-64 public key
+    pub ssh: PublicKey,
     // TODO: store host restriction information as well
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
+pub struct PubKeyStored {
+    /// Name and purpose of the key
+    pub label: String,
+    /// Public and private key to load into the TPM for crytographic operations
+    pub key: KeyMaterial,
+    /// SSH formatted base-64 public key
+    pub ssh: String, // pub ssh: String,
+                     // TODO: store host restriction information as well
 }
 
 pub struct Keychain;
 
 fn default_rsa_params() -> KeyParams {
     KeyParams::Rsa {
-        size: RsaKeyBits::Rsa1024,
+        size: RsaKeyBits::Rsa2048,
         // RSA PSS <https://en.wikipedia.org/wiki/Probabilistic_signature_scheme> is a component of pkcs11 and I'm making the leap that it's the default to use here.
         scheme: RsaScheme::create(RsaSchemeAlgorithm::RsaPss, Some(HashingAlgorithm::Sha256))
             .unwrap(),
+        // the RSA Exponent 0 is shorthand for the TPM's max supported value, 2^16 + 1
         pub_exponent: RsaExponent::create(0).unwrap(),
     }
 }
@@ -40,11 +58,11 @@ impl Keychain {
             fs::create_dir(&configdir).expect("Could not create configuration folder");
         }
 
-        if !configdir.join("keys.json").exists() {
+        let keystore = if !configdir.join("keys.json").exists() {
             let mut handle = fs::File::create(configdir.join("keys.json"))
                 .expect("Could not create configuration file");
 
-            let keystore: Vec<PubKey> = vec![];
+            let keystore: Vec<PubKeyStored> = vec![];
 
             handle
                 .write_fmt(format_args!(
@@ -55,7 +73,7 @@ impl Keychain {
 
             keystore
         } else {
-            let keystore: Vec<PubKey> = serde_json::from_str(
+            let keystore: Vec<PubKeyStored> = serde_json::from_str(
                 fs::read_to_string(configdir.join("keys.json"))
                     .expect("Could not access configuration file")
                     .as_str(),
@@ -63,16 +81,42 @@ impl Keychain {
             .expect("Could not deserialize keys.json");
 
             keystore
-        }
+        };
+
+        keystore
+            .into_iter()
+            .map(|key| PubKey {
+                label: key.label,
+                key: key.key,
+                ssh: parse_public_key_base64(&key.ssh).expect("Failed to interpret key"),
+            })
+            .collect()
+    }
+
+    pub fn get_public_key_by_fingerprint(key_id: &str) -> PublicKey {
+        let keystore = Self::get_public_keys();
+
+        let retrieved = keystore
+            .into_iter()
+            .find(|e| e.ssh.fingerprint() == key_id)
+            .expect(
+                format!(
+                    "Could not locate key with fingerprint {} in keystore",
+                    key_id,
+                )
+                .as_str(),
+            );
+
+        retrieved.ssh
     }
 
     /// Retrieve a keypair by the hash of a pubkey
-    pub fn get_public_key(hash: Vec<u8>) -> Result<PubKey, &'static str> {
-        Ok(Self::get_public_keys()
-            .iter()
-            .find(|e| e.hash == hash)
-            .unwrap()
-            .clone())
+    pub fn get_public_key(key: &PublicKey) -> Result<PubKey, &'static str> {
+        let keystore = Self::get_public_keys();
+
+        let retrieved = keystore.into_iter().find(|e| e.ssh == *key).unwrap();
+
+        Ok(retrieved)
     }
 
     fn get_context() -> TransientKeyContext {
@@ -88,24 +132,53 @@ impl Keychain {
     }
 
     /// Sign data with a keypair
-    pub fn sign_data(data: Vec<u8>, key_hash: Vec<u8>) -> Result<Vec<u8>, &'static str> {
+    pub fn sign_data(data: Vec<u8>, key: &PublicKey) -> Result<Vec<u8>, &'static str> {
         let mut esapi_context = Self::get_context();
 
-        let keypair = Self::get_public_key(key_hash).expect("Could not retrieve key for signing");
+        let keypair = Self::get_public_key(key).expect("Could not retrieve key for signing");
 
         use std::convert::TryFrom;
+
+        let digest: Vec<u8> = match key {
+            PublicKey::Ed25519(_) => unimplemented!(),
+            PublicKey::RSA { hash, .. } => match hash {
+                SignatureHash::SHA2_256 => {
+                    use sha2::{Digest, Sha256};
+
+                    let mut hash = Sha256::new();
+
+                    hash.update(&data);
+
+                    let digest: [u8; 32] = hash.finalize().into();
+                    digest.to_vec()
+                }
+                SignatureHash::SHA2_512 => {
+                    use sha2::{Digest, Sha512};
+
+                    let mut hash = Sha512::new();
+
+                    hash.update(&data);
+
+                    let digest: [u8; 64] = hash.finalize().into();
+                    digest.to_vec()
+                }
+                SignatureHash::SHA1 => unimplemented!("SHA1 is obsolete and is not supported."),
+            },
+        };
 
         let signature = esapi_context
             .sign(
                 keypair.key,
                 default_rsa_params(),
                 None,
-                Digest::try_from(data).unwrap(),
+                Digest::try_from(digest.clone()).unwrap(),
             )
             .expect("Could not sign data");
 
         match signature {
             Signature::RsaPss(rsa_signature) | Signature::RsaSsa(rsa_signature) => {
+                debug_assert!({ key.verify_detached(&digest, &rsa_signature.signature().value()) });
+
                 Ok(rsa_signature.signature().value().to_vec())
             }
             _ => unimplemented!(),
@@ -113,12 +186,12 @@ impl Keychain {
     }
 
     /// Delete a keypair
-    pub fn delete_keypair(hash: Vec<u8>) -> Result<(), &'static str> {
+    pub fn delete_keypair(key: PublicKey) -> Result<(), &'static str> {
         let keystore = Self::get_public_keys();
 
         let keystore: Vec<PubKey> = keystore
             .into_iter()
-            .filter(|key| key.hash != hash)
+            .filter(|oldkey| oldkey.ssh != key)
             .collect();
 
         Self::set_keystore(keystore);
@@ -144,6 +217,15 @@ impl Keychain {
             .open(&configpath)
             .unwrap();
 
+        let keyring: Vec<PubKeyStored> = keyring
+            .into_iter()
+            .map(|key| PubKeyStored {
+                label: key.label,
+                key: key.key,
+                ssh: key.ssh.public_key_base64(),
+            })
+            .collect();
+
         config_file
             .write_fmt(format_args!("{}", serde_json::to_string(&keyring).unwrap()))
             .unwrap();
@@ -156,21 +238,40 @@ impl Keychain {
     pub fn generate_keypair(label: String) -> Result<(), &'static str> {
         let mut esapi_context = Self::get_context();
 
+        let is_rsa = true;
+
         let (key, _) = esapi_context.create_key(default_rsa_params(), 0).unwrap();
 
         let new_pubkey = PubKey {
-            hash: {
-                use sha2::{Digest, Sha256};
+            ssh: if is_rsa {
+                use openssl::pkey::PKey;
+                use openssl::{bn::BigNum, pkey::Public, rsa::Rsa};
+                use thrussh_keys::key::OpenSSLPKey;
 
-                let mut hash = Sha256::new();
-                match key.public() {
-                    tss_esapi::utils::PublicKey::Rsa(val) => {
-                        hash.update(val);
-                    }
+                let rsa_n_param = match key.public() {
+                    tss_esapi::utils::PublicKey::Rsa(val) => val.to_vec(),
                     _ => unimplemented!(),
-                }
+                };
 
-                hash.finalize().to_vec()
+                let rsa_pub = OpenSSLPKey(
+                    PKey::from_rsa(
+                        Rsa::<Public>::from_public_components(
+                            BigNum::from_slice(&rsa_n_param).unwrap(),
+                            BigNum::from_u32(2_u32.pow(16) + 1).unwrap(),
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap(),
+                );
+
+                let rsa_pub = PublicKey::RSA {
+                    key: rsa_pub,
+                    hash: thrussh_keys::key::SignatureHash::SHA2_256,
+                };
+
+                rsa_pub
+            } else {
+                unimplemented!()
             },
             label,
             key: key.clone(),

@@ -1,6 +1,8 @@
+extern crate base64;
 extern crate byteorder;
 extern crate core_foundation;
 extern crate libc;
+extern crate openssl;
 extern crate sha2;
 extern crate ssh_agent;
 extern crate thrussh_keys;
