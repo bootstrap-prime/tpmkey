@@ -1,407 +1,198 @@
+use tss_esapi::{
+    abstraction::transient::{KeyParams, TransientKeyContextBuilder},
+    interface_types::{
+        algorithm::HashingAlgorithm, algorithm::RsaSchemeAlgorithm, key_bits::RsaKeyBits,
+    },
+    structures::{Digest, RsaExponent, RsaScheme, Signature},
+    utils::PublicKey,
+    TransientKeyContext,
+};
 
-use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
-use core_foundation::string::{CFString, CFStringRef};
-use core_foundation::boolean::CFBoolean;
-use core_foundation::array::{CFArray, CFArrayRef, FromVoid};
-use core_foundation::base::{TCFType, CFType, CFTypeRef, OSStatus};
-use core_foundation::data::{CFData, CFDataRef};
-use core_foundation::base::{ kCFAllocatorDefault, CFAllocatorRef};
+use std::{fs, io::Write};
 
-use std::ptr;
-
-pub static PRIVATE_KEY_NAME: &'static str = "com.sekey.priv";
-pub static PUBLIC_KEY_NAME: &'static str = "com.sekey.pub";
-
-static ERR_SEC_DUPLICATE_ITEM: OSStatus = -25299;
-static ERR_SEC_SUCCESS: OSStatus = 0;
-
-type SecAccessControlCreateFlags = u32;
-static K_SEC_ACCESS_CONTROL_TOUCH_ID_ANY: u32 = 1 << 1;
-static K_SEC_ACCESS_CONTROL_PRIVATE_KEY_USAGE: u32 = 1 << 30;
-
-
-extern "C" {
-    static kSecValueRef: CFStringRef;
-    static kSecValueData: CFStringRef;
-    static kSecClass: CFStringRef;
-    static kSecClassKey: CFStringRef;
-    static kSecAttrKeyType: CFStringRef;
-    static kSecAttrKeyTypeEC: CFStringRef;
-    static kSecAttrApplicationTag: CFStringRef;
-    static kSecAttrKeyClass: CFStringRef;
-    static kSecAttrKeyClassPublic: CFStringRef;
-    static kSecAttrKeyClassPrivate: CFStringRef;
-    static kSecReturnRef: CFStringRef;
-    static kSecMatchLimit: CFStringRef;
-    static kSecMatchLimitAll: CFStringRef;
-    static kSecReturnAttributes: CFStringRef;
-    static kSecAttrIsPermanent: CFStringRef;
-    static kSecAttrAccessControl: CFStringRef;
-    static kSecAttrLabel: CFStringRef;
-    static kSecAttrApplicationLabel: CFStringRef;
-    static kSecUseOperationPrompt: CFStringRef;
-    static kSecKeyAlgorithmECDSASignatureMessageX962SHA256: CFStringRef;
-    static kSecAttrAccessibleWhenUnlockedThisDeviceOnly: CFStringRef;
-    static kSecAttrTokenID: CFStringRef;
-    static kSecAttrTokenIDSecureEnclave: CFStringRef;
-    static kSecPrivateKeyAttrs: CFStringRef;
-    static kSecReturnData: CFStringRef;
-
-    fn SecItemCopyMatching(query: CFDictionaryRef, result: *mut CFTypeRef) -> OSStatus;
-    fn SecAccessControlCreateWithFlags(allocator: CFAllocatorRef, protection: CFTypeRef, flags: SecAccessControlCreateFlags, error: *mut CFTypeRef) -> CFTypeRef;
-    fn SecKeyCreateSignature(key: CFTypeRef, algorithm: CFStringRef, dataToSign: CFDataRef, error: *mut CFTypeRef) -> CFDataRef;
-    fn SecKeyCopyAttributes(key: CFTypeRef) -> CFDictionaryRef;
-    fn SecItemDelete(query: CFDictionaryRef) -> OSStatus;
-    fn SecKeyGeneratePair(parameters: CFDictionaryRef, publicKey: *mut CFTypeRef, privateKey: *mut CFTypeRef)-> OSStatus;
-    fn SecItemAdd(query: CFDictionaryRef, keyBits: *mut CFTypeRef) -> OSStatus;
-}
-
-pub struct CFDict{
-    params: Vec<(CFString, CFType)>,
-}
-
-impl CFDict {
-    pub fn new() -> Self {
-        Self {
-            params: vec![]
-        }
-    }
-    pub fn add_string_ref(mut self, key: CFStringRef, value:CFStringRef) -> Self {
-        unsafe {
-            self.params.push((
-                CFString::wrap_under_get_rule(key),
-                CFType::wrap_under_get_rule(value as *const _)
-            ));
-        }
-        self
-    }
-
-    pub fn add_label(mut self, key: CFStringRef, label: &str) -> Self {
-        unsafe {
-            self.params.push((
-                CFString::wrap_under_get_rule(key),
-                CFString::new(label).as_CFType()
-            ));
-        }
-        self
-    }
-
-    pub fn add_cfdata(mut self, key: CFStringRef, label: CFData) -> Self {
-        unsafe {
-            self.params.push((
-                CFString::wrap_under_get_rule(key),
-                label.as_CFType()
-            ));
-        }
-        self
-    }
-
-    pub fn add_cfdict(mut self, key: CFStringRef, dict: CFDictionary) -> Self {
-        unsafe {
-            self.params.push((
-                CFString::wrap_under_get_rule(key),
-                dict.as_CFType()
-            ));
-        }
-        self
-    }
-    pub fn add_cftyperef(mut self, key: CFStringRef, reference: CFTypeRef) -> Self {
-        unsafe {
-            self.params.push((
-                CFString::wrap_under_get_rule(key),
-                TCFType::wrap_under_get_rule(reference)
-            ));
-        }
-        self
-    }
-    pub fn add_boolean(mut self, key: CFStringRef, boolean: bool) -> Self {
-        unsafe {
-            let boolean = match boolean {
-                true => CFBoolean::true_value().as_CFType(),
-                false => CFBoolean::false_value().as_CFType()
-            };
-
-            self.params.push((
-                CFString::wrap_under_get_rule(key),
-                boolean
-            ));
-        }
-        self
-    }
-
-    pub fn get(&self) -> CFDictionary {
-        CFDictionary::from_CFType_pairs(&self.params)
-    }
-}
-
-
-#[derive(Debug)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
 pub struct PubKey {
     pub label: String,
+    pub key: PublicKey,
     pub hash: Vec<u8>,
-    pub key: Vec<u8>,
+    // TODO: store host restriction information as well
 }
 
 pub struct Keychain;
 
+fn default_rsa_params() -> KeyParams {
+    KeyParams::Rsa {
+        size: RsaKeyBits::Rsa1024,
+        // RSA PSS <https://en.wikipedia.org/wiki/Probabilistic_signature_scheme> is a component of pkcs11 and I'm making the leap that it's the default to use here.
+        scheme: RsaScheme::create(RsaSchemeAlgorithm::RsaPss, Some(HashingAlgorithm::Sha256))
+            .unwrap(),
+        pub_exponent: RsaExponent::create(0).unwrap(),
+    }
+}
 impl Keychain {
+    /// Retrieve keys from configured storage file
+    pub fn get_public_keys() -> Vec<PubKey> {
+        Self::get_keystore()
+    }
 
-    pub unsafe fn sec_item_copy_matching(dict: CFDictionary) -> Vec<CFDictionary>{
-            let mut items = vec![];
+    /// Retrieve a keypair by the hash of a pubkey
+    pub fn get_public_key(hash: Vec<u8>) -> Result<PubKey, &'static str> {
+        Ok(Self::get_public_keys()
+            .iter()
+            .find(|e| e.hash == hash)
+            .unwrap()
+            .clone())
+    }
 
-            let mut ret:CFTypeRef = ptr::null();
-            SecItemCopyMatching(dict.as_concrete_TypeRef(), &mut ret);
+    fn get_context() -> TransientKeyContext {
+        let esapi_context = TransientKeyContextBuilder::new()
+            .with_tcti(
+                tss_esapi::tcti_ldr::TctiNameConf::from_environment_variable()
+                    .expect("Could not instantiate tcti from environment"),
+            )
+            .build()
+            .expect("Could not instantiate tcti");
 
-            if ret.is_null(){
-                return items;
+        esapi_context
+    }
+
+    /// Sign data with a keypair
+    pub fn sign_data(data: Vec<u8>, key_hash: Vec<u8>) -> Result<Vec<u8>, &'static str> {
+        let mut esapi_context = Self::get_context();
+
+        let keypair = Self::get_public_key(key_hash).expect("Could not retrieve key for signing");
+
+        let key = esapi_context
+            .load_external_public_key(keypair.key.clone(), default_rsa_params())
+            .unwrap();
+
+        assert!(*key.public() == keypair.key);
+
+        use std::convert::TryFrom;
+
+        let signature = esapi_context
+            .sign(
+                key,
+                default_rsa_params(),
+                None,
+                Digest::try_from(data).unwrap(),
+            )
+            .expect("Could not sign data");
+
+        match signature {
+            Signature::RsaPss(rsa_signature) | Signature::RsaSsa(rsa_signature) => {
+                Ok(rsa_signature.signature().value().to_vec())
             }
+            _ => unimplemented!(),
+        }
+    }
 
-            let data = CFType::from_void(ret);
-            if data.instance_of::<_, CFArray>(){
-                let array:CFArray = CFArray::wrap_under_create_rule(ret as CFArrayRef);
-                for item in &array {
-                    let obj = CFType::from_void(item);
-                    if obj.instance_of::<_, CFDictionary>(){
-                        let dict = CFDictionary::wrap_under_get_rule(item as CFDictionaryRef);
-                        items.push(dict);
+    /// Delete a keypair
+    pub fn delete_keypair(hash: Vec<u8>) -> Result<(), &'static str> {
+        let keystore = Self::get_keystore();
+
+        let keystore: Vec<PubKey> = keystore
+            .into_iter()
+            .filter(|key| key.hash != hash)
+            .collect();
+
+        Self::set_keystore(keystore);
+
+        Ok(())
+    }
+
+    fn get_keystore() -> Vec<PubKey> {
+        // create home dotfiles dir if it doesn't already exist
+        let configdir = home::home_dir()
+            .expect("Couldn't find home directory")
+            .join(".tpmkey");
+
+        if !configdir.exists() {
+            fs::create_dir(&configdir).expect("Could not create configuration folder");
+        }
+
+        if !configdir.join("keys.json").exists() {
+            let mut handle =
+                fs::File::create("keys.json").expect("Could not create configuration file");
+
+            let keystore: Vec<PubKey> = vec![];
+
+            handle
+                .write_fmt(format_args!(
+                    "{}",
+                    serde_json::to_string(&keystore).unwrap()
+                ))
+                .unwrap();
+
+            keystore
+        } else {
+            let keystore: Vec<PubKey> = serde_json::from_str(
+                fs::read_to_string(configdir.join("keys.json"))
+                    .expect("Could not access configuration file")
+                    .as_str(),
+            )
+            .expect("Could not deserialize keys.json");
+
+            keystore
+        }
+    }
+
+    fn set_keystore(keyring: Vec<PubKey>) {
+        // create home dotfiles dir if it doesn't already exist
+        let configdir = home::home_dir()
+            .expect("Couldn't find home directory")
+            .join(".tpmkey");
+
+        if !configdir.exists() {
+            fs::create_dir(&configdir).expect("Could not create configuration folder");
+        }
+
+        let configpath = configdir.join("keys.json");
+        let mut config_file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&configpath)
+            .unwrap();
+
+        config_file
+            .write_fmt(format_args!("{}", serde_json::to_string(&keyring).unwrap()))
+            .unwrap();
+
+        assert!(configpath.exists());
+    }
+
+    /// Generate a new keypair of type Algorithm. Currently, RSA1024 will be generated.
+    /// TODO: support other algorithms.
+    pub fn generate_keypair(label: String) -> Result<(), &'static str> {
+        let mut esapi_context = Self::get_context();
+
+        let (key, _) = esapi_context.create_key(default_rsa_params(), 0).unwrap();
+
+        let new_pubkey = PubKey {
+            hash: {
+                use sha2::{Digest, Sha256};
+
+                let mut hash = Sha256::new();
+                match key.public() {
+                    tss_esapi::utils::PublicKey::Rsa(val) => {
+                        hash.update(val);
                     }
+                    _ => unimplemented!(),
                 }
 
-            }else {
-                items.push(CFDictionary::wrap_under_get_rule(ret as CFDictionaryRef));
-            }
+                hash.finalize().to_vec()
+            },
+            label,
+            key: key.public().clone(),
+        };
 
-            items       
-    }
+        let mut keystore = Self::get_keystore();
 
-    fn get_pubkey_from_cfdictionary(key: CFDictionary) -> PubKey {
-        let label;
-        let key_id;
-        let key_data;
-        unsafe {
-            label = key.find(kSecAttrLabel as *const _)
-                        .map(|label| {
-                                CFString::wrap_under_get_rule(label as *const _).to_string()
-                        }).unwrap_or_else(|| String::new());
+        keystore.push(new_pubkey);
 
-            key_id = key.find(kSecAttrApplicationLabel as *const _)
-                            .map(|key_id| {
-                                CFData::wrap_under_get_rule(key_id as *const _).to_vec()
-                            }).unwrap_or_else(|| Vec::new());
-            
-            // get the public key Vec<u8>, first we have to get the reference
-            // and then the data from the dict object
-            key_data = key.find(kSecValueRef as *const _)
-                        .map(|key_ref| {
-                                CFDictionary::wrap_under_get_rule(SecKeyCopyAttributes(key_ref) as CFDictionaryRef)
-                                .find(kSecValueData as *const _)
-                                .map(|keydata|{
-                                    CFData::wrap_under_get_rule(keydata as *const _).to_vec()
-                                })
-                                .unwrap_or_else(|| Vec::new())
-                        }).unwrap();
-        }
-        PubKey { label: label, hash: key_id, key: key_data }
-    }
+        Self::set_keystore(keystore);
 
-    pub fn get_public_keys() -> Vec<PubKey> {
-        let mut pub_keys = Vec::new();
-        unsafe {
-            // create the query to ask the keychaing.
-            let dict  = CFDict::new()
-                .add_string_ref(kSecClass, kSecClassKey)
-                .add_string_ref(kSecAttrKeyType, kSecAttrKeyTypeEC)
-                .add_label(kSecAttrApplicationTag, PUBLIC_KEY_NAME)
-                .add_string_ref(kSecAttrKeyClass, kSecAttrKeyClassPublic)
-                .add_boolean(kSecReturnRef, true)
-                .add_string_ref(kSecMatchLimit, kSecMatchLimitAll)
-                .add_boolean(kSecReturnAttributes, true)
-                .get();
-
-            let keys = Keychain::sec_item_copy_matching(dict);
-            // iter thru the keys and the get information from the key dict.
-            for key in keys {
-                pub_keys.push(Keychain::get_pubkey_from_cfdictionary(key));
-            }
-
-        }
-        pub_keys
-    }
-
-    unsafe fn get_public_ref(hash:Vec<u8>)-> Result<CFTypeRef, &'static str>{
-        let data = CFData::from_buffer(hash.as_slice());
-        let dict  = CFDict::new()
-                .add_string_ref(kSecClass, kSecClassKey)
-                .add_string_ref(kSecAttrKeyType, kSecAttrKeyTypeEC)
-                .add_label(kSecAttrApplicationTag, PUBLIC_KEY_NAME)
-                .add_cfdata(kSecAttrApplicationLabel, data)
-                .add_string_ref(kSecAttrKeyClass, kSecAttrKeyClassPublic)
-                .add_boolean(kSecReturnRef, true)
-                .add_boolean(kSecReturnAttributes, true)
-                .get();
-        let mut keys = Keychain::sec_item_copy_matching(dict);
-        if let Some(key_) = keys.pop(){
-             Ok(key_.as_CFTypeRef())
-        } else {
-            Err("Key not found")
-        }
-    }
-
-    pub fn get_public_key(hash:Vec<u8>) -> Result<PubKey, &'static str> {
-        let key:PubKey;
-        unsafe {
-            let keyref = Keychain::get_public_ref(hash)?;
-            let keyref = CFDictionary::wrap_under_get_rule(keyref as CFDictionaryRef);
-            key = Keychain::get_pubkey_from_cfdictionary(keyref);
-        }
-
-        Ok(key)
-    }
-
-    unsafe fn get_private_ref(hash:Vec<u8>)-> Result<CFTypeRef, &'static str>{
-        let data = CFData::from_buffer(hash.as_slice());
-        let dict  = CFDict::new()
-            .add_string_ref(kSecClass, kSecClassKey)
-            .add_label(kSecAttrLabel, PRIVATE_KEY_NAME)
-            .add_string_ref(kSecAttrKeyClass, kSecAttrKeyClassPrivate)
-            .add_cfdata(kSecAttrApplicationLabel, data)
-            .add_boolean(kSecReturnRef, true)
-            .add_label(kSecUseOperationPrompt, "Authenticate to Sign Data")
-            .get();
-
-            let mut keys = Keychain::sec_item_copy_matching(dict);
-
-            if let Some(key_) = keys.pop(){
-                 Ok(key_.as_CFTypeRef())
-            } else {
-                Err("Key not found")
-            }
-
-    }
-
-    pub fn sign_data(data: Vec<u8>, key_hash: Vec<u8>) -> Result<Vec<u8>, &'static str> {
-        let retdata: Vec<u8>;
-        unsafe {
-            let data = CFData::from_buffer(data.as_slice());
-            let keyref = Keychain::get_private_ref(key_hash)?;
-            let mut err = ptr::null();
-            let data = SecKeyCreateSignature(keyref, kSecKeyAlgorithmECDSASignatureMessageX962SHA256, data.as_concrete_TypeRef(), &mut err);
-            
-            if !err.is_null(){
-                return Err("Error trying to sign data");
-            }
-            retdata = CFData::wrap_under_get_rule(data as *const _).to_vec()
-        }
-        Ok(retdata)
-    }
-
-    unsafe fn delete_private_key(hash:Vec<u8>){
-        let data = CFData::from_buffer(hash.as_slice());
-        let dict  = CFDict::new()
-            .add_string_ref(kSecClass, kSecClassKey)
-            .add_label(kSecAttrLabel, PRIVATE_KEY_NAME)
-            .add_string_ref(kSecAttrKeyClass, kSecAttrKeyClassPrivate)
-            .add_cfdata(kSecAttrApplicationLabel, data)
-            .add_boolean(kSecReturnRef, true)
-            .get();
-
-        let mut err = SecItemDelete(dict.as_concrete_TypeRef());
-        while err == ERR_SEC_DUPLICATE_ITEM {
-            err = SecItemDelete(dict.as_concrete_TypeRef());
-        }
-
-    }
-
-    unsafe fn delete_public_key(hash:Vec<u8>){
-        let data = CFData::from_buffer(hash.as_slice());
-        let dict  = CFDict::new()
-            .add_string_ref(kSecClass, kSecClassKey)
-            .add_string_ref(kSecAttrKeyType, kSecAttrKeyTypeEC)
-            .add_label(kSecAttrApplicationTag, PUBLIC_KEY_NAME)
-            .add_cfdata(kSecAttrApplicationLabel, data)
-            .add_string_ref(kSecAttrKeyClass, kSecAttrKeyClassPublic)
-            .add_boolean(kSecReturnRef, true)
-            .get();
-
-        let mut err = SecItemDelete(dict.as_concrete_TypeRef());
-        while err == ERR_SEC_DUPLICATE_ITEM {
-            err = SecItemDelete(dict.as_concrete_TypeRef());
-        }
-    }
-
-    pub fn delete_keypair(hash:Vec<u8>) -> Result<(), &'static str> {
-        unsafe {
-            Keychain::delete_private_key(hash.clone());
-            Keychain::delete_public_key(hash);
-        }
         Ok(())
     }
-
-    unsafe fn save_public_key(key: CFTypeRef, label: String) {
-        let save_key_dict  = CFDict::new()
-            .add_string_ref(kSecClass, kSecClassKey)
-            .add_string_ref(kSecAttrKeyType, kSecAttrKeyTypeEC)
-            .add_string_ref(kSecAttrKeyClass, kSecAttrKeyClassPublic)
-            .add_label(kSecAttrApplicationTag, PUBLIC_KEY_NAME)
-            .add_cftyperef(kSecValueRef, key)
-            .add_boolean(kSecAttrIsPermanent, true)
-            .add_boolean(kSecReturnData, true)
-            .add_label(kSecAttrLabel, label.as_str())
-            .get();
-
-
-            let mut key_bits:CFTypeRef = ptr::null();
-
-            let mut err = SecItemAdd(save_key_dict.as_concrete_TypeRef(), &mut key_bits); 
-            while err == ERR_SEC_DUPLICATE_ITEM {
-                err = SecItemDelete(save_key_dict.as_concrete_TypeRef());  
-            }
-            SecItemAdd(save_key_dict.as_concrete_TypeRef(), &mut key_bits); 
-    }
-
-    pub fn generate_keypair(label: String) -> Result<(), &'static str>{
-        unsafe {
-            let mut error:CFTypeRef = ptr::null();
-
-            let access_control = SecAccessControlCreateWithFlags(
-                                    kCFAllocatorDefault,
-                                    kSecAttrAccessibleWhenUnlockedThisDeviceOnly as *const _,
-                                    K_SEC_ACCESS_CONTROL_TOUCH_ID_ANY | K_SEC_ACCESS_CONTROL_PRIVATE_KEY_USAGE,
-                                    &mut error
-                                );
-
-            if !error.is_null(){
-                return Err("Error creating Access Control Flags");
-            }
-            
-            let access_control_dict  = CFDict::new()
-                .add_label(kSecAttrLabel, PRIVATE_KEY_NAME)
-                .add_boolean(kSecAttrIsPermanent, true)
-                .add_cftyperef(kSecAttrAccessControl, access_control)
-                .get();
-
-            let gen_pair_dict  = CFDict::new()
-                .add_label(kSecAttrLabel, PRIVATE_KEY_NAME)
-                .add_string_ref(kSecAttrTokenID, kSecAttrTokenIDSecureEnclave)
-                .add_string_ref(kSecAttrKeyType, kSecAttrKeyTypeEC)
-                .add_cfdict(kSecPrivateKeyAttrs, access_control_dict)
-                .get();
-
-            let mut public_key_ref:CFTypeRef = ptr::null();
-            let mut private_key_ref:CFTypeRef = ptr::null();
-
-            let status = SecKeyGeneratePair(gen_pair_dict.as_concrete_TypeRef(),
-                &mut public_key_ref,
-                &mut private_key_ref);
-
-            if status != ERR_SEC_SUCCESS {
-                return Err("Error creating keypair")
-            }
-            Keychain::save_public_key(public_key_ref, label);
-            
-        }
-        Ok(())
-
-    }
-
 }
