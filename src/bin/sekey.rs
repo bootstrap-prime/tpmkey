@@ -133,8 +133,8 @@ fn main() {
             let key = Keychain::get_public_key(key_id);
             match key {
                 Ok(key) => {
-                    let key = EcdsaSha2Nistp256::write(match key.key {
-                        tss_esapi::utils::PublicKey::Rsa(val) => val,
+                    let key = EcdsaSha2Nistp256::write(match key.key.public() {
+                        tss_esapi::utils::PublicKey::Rsa(val) => val.to_vec(),
                         _ => unimplemented!(),
                     });
                     println!("{} {}", CURVE_TYPE, base64::encode(key.as_slice()))

@@ -25,8 +25,8 @@ impl SSHAgentHandler for Handler {
         let mut idents = Vec::new();
         for key in keys {
             idents.push(Identity {
-                key_blob: EcdsaSha2Nistp256::write(match key.key {
-                    tss_esapi::utils::PublicKey::Rsa(val) => val,
+                key_blob: EcdsaSha2Nistp256::write(match key.key.public() {
+                    tss_esapi::utils::PublicKey::Rsa(val) => val.to_vec(),
                     _ => unimplemented!(),
                 }),
                 key_comment: String::from(CURVE_TYPE),

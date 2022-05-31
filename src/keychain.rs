@@ -1,10 +1,9 @@
 use tss_esapi::{
-    abstraction::transient::{KeyParams, TransientKeyContextBuilder},
+    abstraction::transient::{KeyMaterial, KeyParams, TransientKeyContextBuilder},
     interface_types::{
         algorithm::HashingAlgorithm, algorithm::RsaSchemeAlgorithm, key_bits::RsaKeyBits,
     },
     structures::{Digest, RsaExponent, RsaScheme, Signature},
-    utils::PublicKey,
     TransientKeyContext,
 };
 
@@ -13,7 +12,7 @@ use std::{fs, io::Write};
 #[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
 pub struct PubKey {
     pub label: String,
-    pub key: PublicKey,
+    pub key: KeyMaterial,
     pub hash: Vec<u8>,
     // TODO: store host restriction information as well
 }
@@ -62,17 +61,11 @@ impl Keychain {
 
         let keypair = Self::get_public_key(key_hash).expect("Could not retrieve key for signing");
 
-        let key = esapi_context
-            .load_external_public_key(keypair.key.clone(), default_rsa_params())
-            .unwrap();
-
-        assert!(*key.public() == keypair.key);
-
         use std::convert::TryFrom;
 
         let signature = esapi_context
             .sign(
-                key,
+                keypair.key,
                 default_rsa_params(),
                 None,
                 Digest::try_from(data).unwrap(),
@@ -184,7 +177,7 @@ impl Keychain {
                 hash.finalize().to_vec()
             },
             label,
-            key: key.public().clone(),
+            key: key.clone(),
         };
 
         let mut keystore = Self::get_keystore();
