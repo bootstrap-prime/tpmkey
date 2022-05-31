@@ -17,7 +17,6 @@ use sekey::ecdsa::{EcdsaSha2Nistp256, CURVE_TYPE};
 use sekey::handler::Handler;
 use sekey::Keychain;
 use ssh_agent::SSHAgentHandler;
-use std::env;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
