@@ -3,6 +3,7 @@ extern crate core_foundation;
 extern crate libc;
 extern crate sha2;
 extern crate ssh_agent;
+extern crate thrussh_keys;
 extern crate tss_esapi;
 #[macro_use]
 extern crate eagre_asn1;

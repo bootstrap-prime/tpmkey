@@ -27,16 +27,17 @@ impl EcdsaSha2Nistp256 {
         let curvetype = String::from(CURVE_TYPE);
         let identifier = String::from(CURVE_INDETIFIER);
         let mut data = vec![];
+
+        use thrussh_keys::encoding::Encoding;
+
         //write curve type
-        data.write_u32::<BigEndian>(curvetype.len() as u32).unwrap();
-        data.write_all(curvetype.as_bytes()).unwrap();
+        data.extend_ssh_mpint(curvetype.as_bytes());
         //write identifier
-        data.write_u32::<BigEndian>(identifier.len() as u32)
-            .unwrap();
-        data.write_all(identifier.as_bytes()).unwrap();
+        data.extend_ssh_mpint(identifier.as_bytes());
         //write key
-        data.write_u32::<BigEndian>(key.len() as u32).unwrap();
-        data.write_all(key.as_slice()).unwrap();
+        // the exponent is included in here somewhere????
+        data.extend_ssh_mpint(key.as_slice());
+
         data
     }
 
