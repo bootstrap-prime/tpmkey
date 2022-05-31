@@ -31,7 +31,39 @@ fn default_rsa_params() -> KeyParams {
 impl Keychain {
     /// Retrieve keys from configured storage file
     pub fn get_public_keys() -> Vec<PubKey> {
-        Self::get_keystore()
+        // create home dotfiles dir if it doesn't already exist
+        let configdir = home::home_dir()
+            .expect("Couldn't find home directory")
+            .join(".tpmkey");
+
+        if !configdir.exists() {
+            fs::create_dir(&configdir).expect("Could not create configuration folder");
+        }
+
+        if !configdir.join("keys.json").exists() {
+            let mut handle = fs::File::create(configdir.join("keys.json"))
+                .expect("Could not create configuration file");
+
+            let keystore: Vec<PubKey> = vec![];
+
+            handle
+                .write_fmt(format_args!(
+                    "{}",
+                    serde_json::to_string(&keystore).unwrap()
+                ))
+                .unwrap();
+
+            keystore
+        } else {
+            let keystore: Vec<PubKey> = serde_json::from_str(
+                fs::read_to_string(configdir.join("keys.json"))
+                    .expect("Could not access configuration file")
+                    .as_str(),
+            )
+            .expect("Could not deserialize keys.json");
+
+            keystore
+        }
     }
 
     /// Retrieve a keypair by the hash of a pubkey
@@ -82,7 +114,7 @@ impl Keychain {
 
     /// Delete a keypair
     pub fn delete_keypair(hash: Vec<u8>) -> Result<(), &'static str> {
-        let keystore = Self::get_keystore();
+        let keystore = Self::get_public_keys();
 
         let keystore: Vec<PubKey> = keystore
             .into_iter()
@@ -92,42 +124,6 @@ impl Keychain {
         Self::set_keystore(keystore);
 
         Ok(())
-    }
-
-    fn get_keystore() -> Vec<PubKey> {
-        // create home dotfiles dir if it doesn't already exist
-        let configdir = home::home_dir()
-            .expect("Couldn't find home directory")
-            .join(".tpmkey");
-
-        if !configdir.exists() {
-            fs::create_dir(&configdir).expect("Could not create configuration folder");
-        }
-
-        if !configdir.join("keys.json").exists() {
-            let mut handle = fs::File::create(configdir.join("keys.json"))
-                .expect("Could not create configuration file");
-
-            let keystore: Vec<PubKey> = vec![];
-
-            handle
-                .write_fmt(format_args!(
-                    "{}",
-                    serde_json::to_string(&keystore).unwrap()
-                ))
-                .unwrap();
-
-            keystore
-        } else {
-            let keystore: Vec<PubKey> = serde_json::from_str(
-                fs::read_to_string(configdir.join("keys.json"))
-                    .expect("Could not access configuration file")
-                    .as_str(),
-            )
-            .expect("Could not deserialize keys.json");
-
-            keystore
-        }
     }
 
     fn set_keystore(keyring: Vec<PubKey>) {
@@ -180,7 +176,7 @@ impl Keychain {
             key: key.clone(),
         };
 
-        let mut keystore = Self::get_keystore();
+        let mut keystore = Self::get_public_keys();
 
         keystore.push(new_pubkey);
 
