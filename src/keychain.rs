@@ -105,8 +105,8 @@ impl Keychain {
         }
 
         if !configdir.join("keys.json").exists() {
-            let mut handle =
-                fs::File::create("keys.json").expect("Could not create configuration file");
+            let mut handle = fs::File::create(configdir.join("keys.json"))
+                .expect("Could not create configuration file");
 
             let keystore: Vec<PubKey> = vec![];
 
