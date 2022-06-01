@@ -1,3 +1,4 @@
+use signature::Verifier;
 use ssh_agent::Identity;
 use ssh_agent::Response;
 use ssh_agent::SSHAgentHandler;
@@ -9,6 +10,7 @@ use std::io::Write;
 use thrussh_keys::encoding::Encoding;
 use thrussh_keys::key::KeyPair;
 use thrussh_keys::key::PublicKey;
+use thrussh_keys::PublicKeyBase64;
 
 // use ecdsa::{EcdsaSha2Nistp256, CURVE_TYPE};
 use Keychain;
@@ -50,20 +52,18 @@ impl SSHAgentHandler for Handler {
 
         let signature = match pubkey {
             PublicKey::Ed25519(_) => unimplemented!(),
-            PublicKey::RSA { ref hash, .. } => {
+            PublicKey::RSA { ref hash, ref key } => {
                 // https://tools.ietf.org/html/draft-rsa-dsa-sha2-256-02#section-2.2
-                // let mut buffer = cryptovec::CryptoVec::new();
-                // let name = hash.name();
-                // println!("{:?}", name);
-                // buffer.push_u32_be((name.0.len() + raw_signature.len() + 8) as u32);
-                // buffer.extend_ssh_string(name.0.as_bytes());
-                // buffer.extend_ssh_string(&raw_signature);
+                let mut buffer = cryptovec::CryptoVec::new();
+                let name = hash.name();
+                println!("{:?}", name);
+                buffer.push_u32_be((name.0.len() + raw_signature.len() + 8) as u32);
+                buffer.extend_ssh_string(name.0.as_bytes());
+                buffer.extend_ssh_string(&raw_signature);
 
-                // buffer.to_vec()
+                let resultOne = buffer.to_vec();
 
-                use thrussh_keys::signature::Signature;
-
-                let b64sig = Signature::RSA {
+                let b64sig = thrussh_keys::signature::Signature::RSA {
                     hash: *hash,
                     bytes: raw_signature.clone(),
                 }
@@ -71,22 +71,34 @@ impl SSHAgentHandler for Handler {
 
                 println!("{}", b64sig);
 
-                base64::decode(b64sig).unwrap()
+                use signature::Verifier;
+                use ssh_key::{public::RsaPublicKey, Algorithm, HashAlg, Signature};
+
+                let resultTwo = base64::decode(b64sig).unwrap();
+
+                assert_eq!(resultOne, resultTwo);
+
+                resultOne
                 // b64sig.as_bytes().to_vec()
             }
         };
 
-        use sha2::{Digest, Sha256};
-
-        let mut hash = Sha256::new();
-
-        hash.update(&data);
-
-        let digest: [u8; 32] = hash.finalize().into();
-
         debug_assert!({
-            dbg!(pubkey.verify_detached(&data, &raw_signature))
-                || dbg!(pubkey.verify_detached(&digest, &raw_signature))
+            ssh_key::public::PublicKey::from_bytes(&pubkey.public_key_bytes())
+                .unwrap()
+                .verify(
+                    &data,
+                    &ssh_key::Signature::new(
+                        ssh_key::Algorithm::Rsa {
+                            hash: Some(ssh_key::HashAlg::Sha256),
+                        },
+                        signature.clone(),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+
+            true
         });
 
         Ok(Response::SignResponse {

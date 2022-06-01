@@ -10,6 +10,8 @@ extern crate tss_esapi;
 #[macro_use]
 extern crate eagre_asn1;
 extern crate crypto;
+extern crate signature;
+extern crate ssh_key;
 
 pub mod ecdsa;
 mod keychain;

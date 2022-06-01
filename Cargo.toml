@@ -25,4 +25,5 @@ sha2 = "0.10.2"
 thrussh-keys = { version = "0.21.0", features = [ "openssl" ] }
 openssl = "0.10.40"
 cryptovec = "0.6.1"
-ssh-key = "0.4.2"
+ssh-key = { version = "0.4.2", features = [ "rsa", "fingerprint", "signature" ] }
+signature = "1.5.0"
