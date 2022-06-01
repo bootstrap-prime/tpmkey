@@ -69,8 +69,8 @@
           defaultPackage = crane.lib.${system}.buildPackage {
             src = ./.;
 
-            buildInputs = [ pkgs.tpm2-tss ];
-            nativeBuildInputs = [ pkgs.pkg-config ];
+            buildInputs = with pkgs; [ tpm2-tss openssl ];
+            nativeBuildInputs = with pkgs; [ pkg-config ];
             doCheck = true;
           };
         }
