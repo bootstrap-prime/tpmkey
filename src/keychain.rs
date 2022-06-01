@@ -1,3 +1,4 @@
+use ssh_agent::SSHAgentHandler;
 use thrussh_keys::{
     key::{PublicKey, SignatureHash},
     parse_public_key_base64, PublicKeyBase64,
@@ -12,6 +13,8 @@ use tss_esapi::{
 };
 
 use std::{fs, io::Write};
+
+use crate::handler::Handler;
 
 pub struct PubKey {
     /// Name and purpose of the key
@@ -43,7 +46,7 @@ fn default_rsa_params() -> KeyParams {
         scheme: RsaScheme::create(RsaSchemeAlgorithm::RsaPss, Some(HashingAlgorithm::Sha256))
             .unwrap(),
         // the RSA Exponent 0 is shorthand for the TPM's max supported value, 2^16 + 1
-        pub_exponent: RsaExponent::create(0).unwrap(),
+        pub_exponent: RsaExponent::create(2_u32.pow(16) + 1).unwrap(),
     }
 }
 impl Keychain {
@@ -132,7 +135,7 @@ impl Keychain {
     }
 
     /// Sign data with a keypair
-    pub fn sign_data(data: Vec<u8>, key: &PublicKey) -> Result<Vec<u8>, &'static str> {
+    pub fn sign_data(data: &[u8], key: &PublicKey) -> Result<Vec<u8>, &'static str> {
         let mut esapi_context = Self::get_context();
 
         let keypair = Self::get_public_key(key).expect("Could not retrieve key for signing");
@@ -177,8 +180,6 @@ impl Keychain {
 
         match signature {
             Signature::RsaPss(rsa_signature) | Signature::RsaSsa(rsa_signature) => {
-                debug_assert!({ key.verify_detached(&digest, &rsa_signature.signature().value()) });
-
                 Ok(rsa_signature.signature().value().to_vec())
             }
             _ => unimplemented!(),
@@ -277,11 +278,20 @@ impl Keychain {
             key: key.clone(),
         };
 
+        let thekey = new_pubkey.ssh.fingerprint();
+
         let mut keystore = Self::get_public_keys();
-
         keystore.push(new_pubkey);
-
         Self::set_keystore(keystore);
+
+        let thekey = Self::get_public_key_by_fingerprint(thekey.as_str());
+        let data_to_sign = vec![
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 16, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        ];
+
+        let mut handler = Handler::new();
+        handler.sign_request(thekey.public_key_bytes(), data_to_sign, 0);
 
         Ok(())
     }

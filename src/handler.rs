@@ -6,6 +6,9 @@ use ecdsa::{EcdsaSha2Nistp256, CURVE_TYPE};
 
 use byteorder::{BigEndian, WriteBytesExt};
 use std::io::Write;
+use thrussh_keys::encoding::Encoding;
+use thrussh_keys::key::KeyPair;
+use thrussh_keys::key::PublicKey;
 
 // use ecdsa::{EcdsaSha2Nistp256, CURVE_TYPE};
 use Keychain;
@@ -43,38 +46,84 @@ impl SSHAgentHandler for Handler {
             thrussh_keys::key::parse_public_key(&pubkey).expect("Passed invalid public key by ssh");
 
         // here we sign the request and do all the enclave communication
-        let signed = Keychain::sign_data(data, &pubkey)?;
+        let raw_signature = Keychain::sign_data(&data, &pubkey)?;
 
-        let is_rsa = true;
+        let signature = match pubkey {
+            PublicKey::Ed25519(_) => unimplemented!(),
+            PublicKey::RSA { ref hash, .. } => {
+                // https://tools.ietf.org/html/draft-rsa-dsa-sha2-256-02#section-2.2
+                // let mut buffer = cryptovec::CryptoVec::new();
+                // let name = hash.name();
+                // println!("{:?}", name);
+                // buffer.push_u32_be((name.0.len() + raw_signature.len() + 8) as u32);
+                // buffer.extend_ssh_string(name.0.as_bytes());
+                // buffer.extend_ssh_string(&raw_signature);
 
-        if is_rsa {
-            //sign that we would return
-            let mut signature: Vec<u8> = Vec::new();
+                // buffer.to_vec()
 
-            signature.write_u32::<BigEndian>(signed.len() as u32)?;
-            signature.write_all(signed.as_slice())?;
+                use thrussh_keys::signature::Signature;
 
-            Ok(Response::SignResponse {
-                algo_name: String::from(pubkey.name()),
-                signature,
-            })
-        } else {
-            unimplemented!()
-            // let ecdsasign = EcdsaSha2Nistp256::parse_asn1(signed);
+                let b64sig = Signature::RSA {
+                    hash: *hash,
+                    bytes: raw_signature.clone(),
+                }
+                .to_base64();
 
-            // //write signR
-            // signature
-            //     .write_u32::<BigEndian>(ecdsasign.r.len() as u32)
-            //     .unwrap();
-            // signature.write_all(ecdsasign.r.as_slice())?;
+                println!("{}", b64sig);
 
-            // //write signS
-            // signature
-            //     .write_u32::<BigEndian>(ecdsasign.s.len() as u32)
-            //     .unwrap();
-            // signature.write_all(ecdsasign.s.as_slice())?;
+                base64::decode(b64sig).unwrap()
+                // b64sig.as_bytes().to_vec()
+            }
+        };
 
-            // response signature
-        }
+        use sha2::{Digest, Sha256};
+
+        let mut hash = Sha256::new();
+
+        hash.update(&data);
+
+        let digest: [u8; 32] = hash.finalize().into();
+
+        debug_assert!({
+            dbg!(pubkey.verify_detached(&data, &raw_signature))
+                || dbg!(pubkey.verify_detached(&digest, &raw_signature))
+        });
+
+        Ok(Response::SignResponse {
+            algo_name: String::from(pubkey.name()),
+            signature,
+        })
+
+        // if is_rsa {
+        //     //sign that we would return
+        //     let mut buffer: Vec<u8> = Vec::new();
+
+        //     // signature.write_u32::<BigEndian>(signed.len() as u32)?;
+        //     // signature.write_all(signed.as_slice())?;
+
+        //     debug_assert!({ pubkey.verify_detached(&data, &buffer) });
+
+        //     Ok(Response::SignResponse {
+        //         algo_name: String::from(pubkey.name()),
+        //         signature: buffer,
+        //     })
+        // } else {
+        //     unimplemented!()
+        //     // let ecdsasign = EcdsaSha2Nistp256::parse_asn1(signed);
+
+        //     // //write signR
+        //     // signature
+        //     //     .write_u32::<BigEndian>(ecdsasign.r.len() as u32)
+        //     //     .unwrap();
+        //     // signature.write_all(ecdsasign.r.as_slice())?;
+
+        //     // //write signS
+        //     // signature
+        //     //     .write_u32::<BigEndian>(ecdsasign.s.len() as u32)
+        //     //     .unwrap();
+        //     // signature.write_all(ecdsasign.s.as_slice())?;
+
+        //     // response signature
+        // }
     }
 }
