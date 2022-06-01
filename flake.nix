@@ -22,6 +22,27 @@
               toolchain.default.override {
                 extensions = [ "rust-src" "rustfmt" "rust-analyzer-preview" ];
               }));
+
+            cargo-makedocs = (pkgs.rustPlatform.buildRustPackage rec {
+              pname = "cargo-makedocs";
+              version = "1.2.0";
+
+              src = pkgs.fetchFromGitHub {
+                owner = "Bunogi";
+                repo = "cargo-makedocs";
+                rev = "${version}";
+                sha256 = "kTyAnnJIrpfoN/kmnfA+TlA70K7AtzrogqT0YUi5P+I=";
+              };
+
+              cargoSha256 = "gHpWWPTrY5lcgaFWGbSZ17IPuEJdPSpbYraapCdO1C8=";
+
+              meta = with pkgs.lib; {
+                description = "A cargo subcommand to build documentation for direct dependencies of your current crate.";
+                homepage = "https://github.com/Bunogi/cargo-makedocs/tree/1.2.0";
+                license = licenses.mit;
+                maintainers = with maintainers; [ bootstrap-prime ];
+              };
+            });
           # unfortunately we cannot use an llvm environment because littlefs requires gcc to build.
           in pkgs.mkShell {
             nativeBuildInputs = with pkgs; [
@@ -31,6 +52,11 @@
               pkg-config
               tpm2-tss
               openssl
+
+              # required for rust docs in org-mode
+              pandoc
+              fd
+              cargo-makedocs
 
               # for a good developer experience
               cargo-edit
