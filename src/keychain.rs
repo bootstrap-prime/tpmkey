@@ -172,17 +172,62 @@ impl Keychain {
 
         let signature = esapi_context
             .sign(
-                keypair.key,
+                keypair.key.clone(),
                 default_rsa_params(),
                 None,
                 Digest::try_from(digest.clone()).unwrap(),
             )
             .expect("Could not sign data");
 
+        // ensure that signature is valid according to the TPM's internal representation
+        debug_assert!({
+            esapi_context
+                .verify_signature(
+                    keypair.key.clone(),
+                    default_rsa_params(),
+                    Digest::try_from(digest.clone()).unwrap(),
+                    signature.clone(),
+                )
+                .expect("unable to verify signed data");
+            true
+        });
+
+        // ensure that the signature is valid according to ssh's representation of the pubkey and signature
+        debug_assert!({
+            use signature::Verifier;
+            use thrussh_keys::PublicKeyBase64;
+
+            let ssh_formatted_key =
+                ssh_key::public::PublicKey::from_bytes(&key.public_key_bytes()).unwrap();
+
+            assert_eq!(
+                &ssh_formatted_key.to_bytes().unwrap(),
+                &key.public_key_bytes()
+            );
+
+            match &signature {
+                Signature::RsaSsa(rsa_signature) => {
+                    ssh_formatted_key
+                        .verify(
+                            &data,
+                            &ssh_key::Signature::new(
+                                ssh_key::Algorithm::Rsa {
+                                    hash: Some(ssh_key::HashAlg::Sha256),
+                                },
+                                rsa_signature.signature().value().to_vec(),
+                            )
+                            .unwrap(),
+                        )
+                        .unwrap();
+                }
+                _ => unimplemented!(),
+            };
+
+            true
+        });
+
         match signature {
-            Signature::RsaPss(rsa_signature) | Signature::RsaSsa(rsa_signature) => {
-                Ok(rsa_signature.signature().value().to_vec())
-            }
+            Signature::RsaSsa(rsa_signature) => Ok(rsa_signature.signature().value().to_vec()),
             _ => unimplemented!(),
         }
     }
@@ -201,6 +246,8 @@ impl Keychain {
         Ok(())
     }
 
+    /// Set the contents of the keystore to a given value
+    /// This will overwrite previous values of the keystore, but this is fine because storing data is hard.
     fn set_keystore(keyring: Vec<PubKey>) {
         // create home dotfiles dir if it doesn't already exist
         let configdir = home::home_dir()
