@@ -42,13 +42,14 @@ pub struct Keychain;
 fn default_rsa_params() -> KeyParams {
     KeyParams::Rsa {
         size: RsaKeyBits::Rsa2048,
-        // RSA PSS <https://en.wikipedia.org/wiki/Probabilistic_signature_scheme> is a component of pkcs11 and I'm making the leap that it's the default to use here.
-        scheme: RsaScheme::create(RsaSchemeAlgorithm::RsaPss, Some(HashingAlgorithm::Sha256))
+        // RSA SSA must be used here as it's part of pkcs1 v1.5
+        scheme: RsaScheme::create(RsaSchemeAlgorithm::RsaSsa, Some(HashingAlgorithm::Sha256))
             .unwrap(),
         // the RSA Exponent 0 is shorthand for the TPM's max supported value, 2^16 + 1
-        pub_exponent: RsaExponent::create(2_u32.pow(16) + 1).unwrap(),
+        pub_exponent: RsaExponent::create(65537).unwrap(),
     }
 }
+
 impl Keychain {
     /// Retrieve keys from configured storage file
     pub fn get_public_keys() -> Vec<PubKey> {
@@ -258,7 +259,7 @@ impl Keychain {
                     PKey::from_rsa(
                         Rsa::<Public>::from_public_components(
                             BigNum::from_slice(&rsa_n_param).unwrap(),
-                            BigNum::from_u32(2_u32.pow(16) + 1).unwrap(),
+                            BigNum::from_u32(65537).unwrap(),
                         )
                         .unwrap(),
                     )
