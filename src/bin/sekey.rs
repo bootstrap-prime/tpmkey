@@ -128,7 +128,11 @@ fn main() {
     if let Some(key_id) = matches.value_of("export-key") {
         let key = Keychain::get_public_key_by_fingerprint(key_id);
         let keyblob = thrussh_keys::PublicKeyBase64::public_key_base64(&key);
-        println!("{} {}", key.name(), keyblob.trim())
+        println!(
+            "{} {}",
+            key.name(),
+            keyblob.split_whitespace().collect::<String>()
+        )
     }
 
     if let Some(key_id) = matches.value_of("delete-keypair") {
