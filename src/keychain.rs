@@ -295,6 +295,10 @@ impl Keychain {
 
     /// Generate a new keypair of type Algorithm. Currently, RSA1024 will be generated.
     /// TODO: support other algorithms.
+    /// We can even add some extra assurance to unsupported algorithms like ed25519 by encrypting private key (using a rsa encryption key and tss_esapi rsa_encrypt)
+    /// material and only decrypting it while we're about to use it. it's not ideal and has a larger attack surface
+    /// than just TPM keys, but it adds some additional assurance.
+    /// TODO: add assurance that only one key with a name can exist at a time. no duplicate names.
     pub fn generate_keypair(label: String) -> Result<(), &'static str> {
         let mut esapi_context = Self::get_context();
 
