@@ -49,7 +49,7 @@ Create KeyPair inside the TPM:
 
 ```sh
 ntrippar@macbookpro:~% tpmkey --generate-keypair "Github Key"
-Keypair Github Key sucessfully generated
+Keypair Github Key successfully generated
 
 ```
 
@@ -76,7 +76,7 @@ Delete Keypair:
 
 ```sh
 ntrippar@macbookpro:~% tpmkey --delete-keypair d179eb4c2d6a242de64e82240b8b6e611cf0d729
-Key d179eb4c2d6a242de64e82240b8b6e611cf0d729 sucessfully deleted
+Key d179eb4c2d6a242de64e82240b8b6e611cf0d729 successfully deleted
 ```
 
 Use key for a specific host:
