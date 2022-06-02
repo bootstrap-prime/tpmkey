@@ -9,7 +9,7 @@
   };
 
   outputs = inputs@{ self, flake-utils, nixpkgs, rust-overlay, crane, ... }:
-    flake-utils.lib.eachDefaultSystem (system:
+    flake-utils.lib.eachSystem [ flake-utils.lib.system.x86_64-linux flake-utils.lib.system.aarch64-linux ] (system:
       let
         overlays = [ (import rust-overlay) ];
         pkgs = import nixpkgs {
@@ -17,12 +17,12 @@
         };
       in
         rec {
-          devShell = let
-            rust = (pkgs.rust-bin.selectLatestNightlyWith (toolchain:
-              toolchain.default.override {
-                extensions = [ "rust-src" "rustfmt" "rust-analyzer-preview" ];
-              }));
+          rust = (pkgs.rust-bin.selectLatestNightlyWith (toolchain:
+            toolchain.default.override {
+              extensions = [ "rust-src" "rustfmt" "rust-analyzer-preview" ];
+            }));
 
+          devShell = let
             cargo-makedocs = (pkgs.rustPlatform.buildRustPackage rec {
               pname = "cargo-makedocs";
               version = "1.2.0";
@@ -72,6 +72,20 @@
             buildInputs = with pkgs; [ tpm2-tss openssl ];
             nativeBuildInputs = with pkgs; [ pkg-config ];
             doCheck = true;
+          };
+
+          checks = {
+            build = self.defaultPackage.${system};
+
+            format = pkgs.runCommand "check-format" { buildInputs = [ rust ]; } ''
+              ${rust}/bin/cargo-fmt fmt --manifest-path ${./.}/Cargo.toml --check
+              touch $out
+            '';
+
+            typos = pkgs.runCommand "typos" { buildInputs = [ pkgs.typos ]; } ''
+              ${pkgs.typos}/bin/typos -- ${./.}
+              touch $out
+            '';
           };
         }
     );
