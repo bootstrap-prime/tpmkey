@@ -114,6 +114,17 @@ impl Keychain {
         retrieved.ssh
     }
 
+    pub fn get_public_key_by_name(key_name: &str) -> PublicKey {
+        let keystore = Self::get_public_keys();
+
+        let retrieved = keystore
+            .into_iter()
+            .find(|e| e.label == key_name)
+            .expect(format!("Could not locate key with name {} in keystore", key_name,).as_str());
+
+        retrieved.ssh
+    }
+
     /// Retrieve a keypair by the hash of a pubkey
     pub fn get_public_key(key: &PublicKey) -> Result<PubKey, &'static str> {
         let keystore = Self::get_public_keys();

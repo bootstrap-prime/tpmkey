@@ -126,7 +126,7 @@ fn main() {
 
     // match export-key
     if let Some(key_id) = matches.value_of("export-key") {
-        let key = Keychain::get_public_key_by_fingerprint(key_id);
+        let key = Keychain::get_public_key_by_name(key_id);
         let keyblob = thrussh_keys::PublicKeyBase64::public_key_base64(&key);
         println!(
             "{} {}",
@@ -145,7 +145,7 @@ fn main() {
         let key = Keychain::generate_keypair(label.to_string());
         match key {
             Ok(_) => {
-                println!("Keypair SHA256:{} successfully generated", label)
+                println!("Keypair {} successfully generated", label)
             }
             Err(_) => eprintln!("Error generating key"),
         }
