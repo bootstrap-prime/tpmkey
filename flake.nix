@@ -74,9 +74,47 @@
             doCheck = true;
           };
 
-          checks = {
+          checks = let
+            makeTest = (import (nixpkgs + "/nixos/lib/testing-python.nix") {
+              inherit system;
+              extraConfigurations = [{
+                # TODO: add a systemd module to start up the vtpm
+                # this extraConfigurations gets run in each individual vm
+              }];
+            }).makeTest;
+          in rec {
             build = self.defaultPackage.${system};
 
+            # add additional tests for each key type:
+            # - key generation test, ensure ssh can recognize the key as a key
+            # - ensure you can log in to a remote with this key
+            # these tests can be made with makeTest
+            # these can be made with https://edolstra.github.io/pubs/decvms-issre2010-final.pdf keywords `makeTest nixos`
+            # https://github.com/NixOS/nixpkgs/blob/e6123938cafa5f5a368090c68d9012adb980da5f/nixos/lib/testing-python.nix#L149
+            # https://github.com/edolstra/dwarffs/blob/e768ce3239156de05f7ff3210d86a80762730f30/flake.nix#L54
+
+            generate-key = makeTest {
+              name = "ensure-valid-key";
+              nodes = {
+                client = { ... }: {};
+              };
+
+              testScript = ''
+                start_all()
+                client.wait_for_unit("multi-user.target")
+                client.succeed("export TPM_PATH='/etc/tpmrm0' && mkdir -p $TPM_PATH")
+                client.succeed("export TPM_PATH='/etc/tpmrm0' && ${pkgs.swtpm}/bin/swtpm_cuse -n tpmrm0 --tpm2&")
+                client.succeed("export TPM_PATH='/etc/tpmrm0' && ${pkgs.swtpm}/bin/swtpm_ioctl -i /dev/tpmrm0")
+                client.succeed("export TPM_PATH='/etc/tpmrm0' && ${pkgs.swtpm}/bin/swtpm_bios --tpm-device /dev/tpmrm0 --tpm2")
+
+                client.succeed("export TPM2TOOLS_TCTI='device:/dev/tpmrm0' && ${build}/bin/sekey --generate-keypair 'test'")
+                client.succeed("export TPM2TOOLS_TCTI='device:/dev/tpmrm0' && ${build}/bin/sekey --export-key 'test' > ./pub.key")
+                client.succeed("${pkgs.openssh}/bin/ssh-keygen -l -f ./pub.key")
+
+              '';
+            };
+
+            # TODO: rewrite RustCrypto/formats/ssh-key to support serializing and deserializing out of the openssh wrapper
             format = pkgs.runCommand "check-format" { buildInputs = [ rust ]; } ''
               ${rust}/bin/cargo-fmt fmt --manifest-path ${./.}/Cargo.toml --check
               touch $out
