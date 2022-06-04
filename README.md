@@ -107,3 +107,13 @@ cargo build --release
 
 ## Contribute
 Members of the open-source community are encouraged to submit pull requests directly through GitHub.
+
+### TODO: 
+- support all native tpm keys (rsa, ecdsa)
+- implement key generation key type options
+- add ssh format serialization and deserialization to RustCrypto/formats/ssh-key
+- support ed25519 keys with encrypted-at-rest private keys and memory protection  
+  private keys would be wrapped in a tpm key, and unwrapped into a memory protected space as they are about to be used.
+  memory protection techniques, like memfd_secret (displayed well [here](https://github.com/CmdrMoozy/bdrck/blob/3079593bc1a652f5bd034bf583327059eeb09d05/bdrck/src/crypto/secret.rs)) and [shielded](https://docs.rs/shielded/latest/shielded/) or [secrets](https://crates.io/crates/secrets/1.2.0).  
+- add sign-in tests for all key types
+- support locking keys behind secure boot
