@@ -96,20 +96,35 @@
             generate-key = makeTest {
               name = "ensure-valid-key";
               nodes = {
-                client = { ... }: {};
+                client = { ... }: {
+                  virtualisation.qemu.options = [
+                    "-chardev socket,id=chrtpm,path=/tmp/swtpm-sock"
+                    "-tpmdev emulator,id=tpm0,chardev=chrtpm"
+                    "-device tpm-tis,tpmdev=tpm0"
+                  ];
+
+                  environment.sessionVariables = {
+                    TPM2TOOLS_TCTI = "device:/dev/tpmrm0";
+                  };
+                };
               };
 
               testScript = ''
-                start_all()
-                client.wait_for_unit("multi-user.target")
-                client.succeed("export TPM_PATH='/etc/tpmrm0' && mkdir -p $TPM_PATH")
-                client.succeed("export TPM_PATH='/etc/tpmrm0' && ${pkgs.swtpm}/bin/swtpm_cuse -n tpmrm0 --tpm2&")
-                client.succeed("export TPM_PATH='/etc/tpmrm0' && ${pkgs.swtpm}/bin/swtpm_ioctl -i /dev/tpmrm0")
-                client.succeed("export TPM_PATH='/etc/tpmrm0' && ${pkgs.swtpm}/bin/swtpm_bios --tpm-device /dev/tpmrm0 --tpm2")
+                  import subprocess
+                  import tempfile
 
-                client.succeed("export TPM2TOOLS_TCTI='device:/dev/tpmrm0' && ${build}/bin/sekey --generate-keypair 'test'")
-                client.succeed("export TPM2TOOLS_TCTI='device:/dev/tpmrm0' && ${build}/bin/sekey --export-key 'test' > ./pub.key")
-                client.succeed("${pkgs.openssh}/bin/ssh-keygen -l -f ./pub.key")
+                  def start_swtpm(tpmstate):
+                    subprocess.Popen(["${pkgs.swtpm}/bin/swtpm", "socket", "--tpmstate", "dir="+tpmstate, "--ctrl", "type=unixio,path=/tmp/swtpm-sock", "--log", "level=0", "--tpm2"])
+
+                  with tempfile.TemporaryDirectory() as tpmstate:
+                    start_swtpm(tpmstate)
+
+                    start_all()
+                    client.wait_for_unit("multi-user.target")
+
+                    client.succeed("${build}/bin/sekey --generate-keypair 'test'")
+                    client.succeed("${build}/bin/sekey --export-key 'test' > ./pub.key")
+                    client.succeed("${pkgs.openssh}/bin/ssh-keygen -l -f ./pub.key")
 
               '';
             };
