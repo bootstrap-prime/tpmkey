@@ -82,6 +82,31 @@
                 # this extraConfigurations gets run in each individual vm
               }];
             }).makeTest;
+
+            # tpm options to enable qemu utilizing the swtpm started up by the test script
+            tpm_opts = {
+              virtualisation.qemu.options = [
+                "-chardev socket,id=chrtpm,path=/tmp/swtpm-sock"
+                "-tpmdev emulator,id=tpm0,chardev=chrtpm"
+                "-device tpm-tis,tpmdev=tpm0"
+              ];
+
+              environment.sessionVariables = {
+                TPM2TOOLS_TCTI = "device:/dev/tpmrm0";
+              };
+            };
+            # test script that starts up the swtpm
+            tpm_script = ''
+              import subprocess
+              import tempfile
+
+              def start_swtpm(tpmstate):
+                subprocess.Popen(["${pkgs.swtpm}/bin/swtpm", "socket", "--tpmstate", "dir="+tpmstate, "--ctrl", "type=unixio,path=/tmp/swtpm-sock", "--log", "level=0", "--tpm2"])
+
+              with tempfile.TemporaryDirectory() as tpmstate:
+                start_swtpm(tpmstate)
+            '';
+
           in rec {
             build = self.defaultPackage.${system};
 
@@ -97,35 +122,17 @@
               name = "ensure-valid-key";
               nodes = {
                 client = { ... }: {
-                  virtualisation.qemu.options = [
-                    "-chardev socket,id=chrtpm,path=/tmp/swtpm-sock"
-                    "-tpmdev emulator,id=tpm0,chardev=chrtpm"
-                    "-device tpm-tis,tpmdev=tpm0"
-                  ];
-
-                  environment.sessionVariables = {
-                    TPM2TOOLS_TCTI = "device:/dev/tpmrm0";
-                  };
-                };
+                } // tpm_opts;
               };
 
               testScript = ''
-                  import subprocess
-                  import tempfile
-
-                  def start_swtpm(tpmstate):
-                    subprocess.Popen(["${pkgs.swtpm}/bin/swtpm", "socket", "--tpmstate", "dir="+tpmstate, "--ctrl", "type=unixio,path=/tmp/swtpm-sock", "--log", "level=0", "--tpm2"])
-
-                  with tempfile.TemporaryDirectory() as tpmstate:
-                    start_swtpm(tpmstate)
-
+                  ${tpm_script}
                     start_all()
                     client.wait_for_unit("multi-user.target")
 
                     client.succeed("${build}/bin/sekey --generate-keypair 'test'")
                     client.succeed("${build}/bin/sekey --export-key 'test' > ./pub.key")
                     client.succeed("${pkgs.openssh}/bin/ssh-keygen -l -f ./pub.key")
-
               '';
             };
 
