@@ -91,9 +91,7 @@
                 "-device tpm-tis,tpmdev=tpm0"
               ];
 
-              environment.sessionVariables = {
-                TPM2TOOLS_TCTI = "device:/dev/tpmrm0";
-              };
+              environment.sessionVariables.TPM2TOOLS_TCTI = "device:/dev/tpmrm0";
             };
             # test script that starts up the swtpm
             tpm_script = ''
@@ -117,6 +115,42 @@
             # these can be made with https://edolstra.github.io/pubs/decvms-issre2010-final.pdf keywords `makeTest nixos`
             # https://github.com/NixOS/nixpkgs/blob/e6123938cafa5f5a368090c68d9012adb980da5f/nixos/lib/testing-python.nix#L149
             # https://github.com/edolstra/dwarffs/blob/e768ce3239156de05f7ff3210d86a80762730f30/flake.nix#L54
+
+            login-rsa = makeTest {
+              name = "login-rsa";
+              nodes = {
+                client = { ... }: {
+                  users.extraUsers.bob = {
+                    home = "/home/bob";
+                    isNormalUser = true;
+                  };
+
+                  systemd.user.services.sekey-agent = {
+                    wantedBy = [ "default.target" ];
+                    serviceConfig = {
+                      ExecStart = "${build}/bin/sekey --daemon";
+                      Type = "exec";
+                    };
+                  };
+
+                  environment.sessionVariables.SSH_AUTH_SOCK = "/root/.tpmkey/ssh-agent.ssh";
+                  services.openssh.enable = true;
+                } // tpm_opts;
+              };
+
+              testScript = ''
+                  ${tpm_script}
+                    start_all()
+                    client.wait_for_unit("multi-user.target")
+
+                    client.succeed("${build}/bin/sekey --generate-keypair 'test'")
+                    client.succeed("${build}/bin/sekey --export-key 'test' > ./pub.key")
+                    client.succeed("mkdir -p /home/bob/.ssh && touch /home/bob/.ssh/authorized_keys")
+                    client.succeed("cat ./pub.key >> /home/bob/.ssh/authorized_keys")
+                    client.start_job("sekey-agent.service", "root")
+                    client.succeed("${pkgs.openssh}/bin/ssh bob@localhost '''exit $([[ $USER == 'root\n' ]])''' ")
+              '';
+            };
 
             generate-key = makeTest {
               name = "ensure-valid-key";
